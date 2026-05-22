@@ -235,6 +235,13 @@ async function insertOrderIntoSupabase(order: Order) {
 
   const orderRow = saveOrderHeaderRows([order])[0]
 
+  // Server-side guard: prevent inserting orders scheduled in the past
+  const scheduled = order.orderType === 'delivery' ? order.deliveryTime : order.pickupTime || order.createdAt
+  if (order.scheduleType === 'later' && scheduled) {
+    const scheduledTs = new Date(scheduled).getTime()
+    if (isNaN(scheduledTs) || scheduledTs < Date.now()) throw new Error('Scheduled time cannot be in the past.')
+  }
+
   const rpcResponse = await supabase.rpc('create_order_with_items', {
     order_payload: orderRow,
     items_payload: order.items.map((item) => ({ productId: item.productId, quantity: item.quantity })),
@@ -708,11 +715,61 @@ function Checkout({ cart, go, subtotal, tax, placeOrder }: { cart: CartItem[]; g
   const [form, setForm] = useState(blankCheckout)
   if (!cart.length) return <section><div className="cart-empty"><h3>Your bag is empty</h3><button className="btn-gold" onClick={() => go('menu')}>Browse Menu</button></div></section>
   const deliveryFee = form.orderType === 'delivery' ? feeForAddress(form.deliveryAddress) : 0
-  const valid = form.customerName && form.customerPhone && (form.orderType === 'pickup' || (form.deliveryAddress && deliveryFee > 0))
+  const isTimeInFuture = (iso: string) => {
+    if (!iso) return false
+    const ts = new Date(iso).getTime()
+    return !isNaN(ts) && ts >= Date.now()
+  }
+  const scheduleValid = form.scheduleType === 'later' ? (form.orderType === 'pickup' ? isTimeInFuture(form.pickupTime) : isTimeInFuture(form.deliveryTime)) : true
+  const valid = Boolean(form.customerName && form.customerPhone && (form.orderType === 'pickup' || (form.deliveryAddress && deliveryFee > 0)) && scheduleValid)
   return (
     <>
       <PageHeader title="Checkout" icon="bi-pencil-square" text="Almost done! Fill in your details and we'll get right on it." crumbs={['Home', 'Order Bag', 'Checkout']} />
-      <section className="light"><form className="container checkout-grid" onSubmit={(e) => { e.preventDefault(); if (valid) placeOrder(form) }}><div className="checkout-card"><h5><i className="bi bi-person-fill"></i> Your Details</h5><div className="form-grid"><Field label="Full Name *" value={form.customerName} set={(v) => setForm({ ...form, customerName: v })} placeholder="e.g. Juan dela Cruz" /><Field label="Email Address (optional)" value={form.customerEmail} set={(v) => setForm({ ...form, customerEmail: v })} placeholder="you@email.com" /><Field label="Contact Number *" value={form.customerPhone} set={(v) => setForm({ ...form, customerPhone: v })} placeholder="+63 900 000 0000" /><label className="form-block">Order Type *<select className="form-select" value={form.orderType} onChange={(e) => { const orderType = e.target.value as 'pickup' | 'delivery'; setForm({ ...form, orderType, paymentMethod: orderType === 'pickup' ? 'cash_on_pickup' : 'cash_on_delivery', scheduleType: orderType === 'delivery' ? 'later' : form.scheduleType }) }}><option value="pickup">Pickup</option><option value="delivery">Delivery</option></select></label><label className="form-block">When do you need it? *<select className="form-select" value={form.scheduleType} onChange={(e) => setForm({ ...form, scheduleType: e.target.value as 'now' | 'later' })} disabled={form.orderType === 'delivery'}><option value="now">Now (pickup only, automatic 10-minute preparation)</option><option value="later">Later (pickup: 1 hour, delivery: 20 minutes)</option></select><span className="form-text">Operating hours: Mon-Fri 7:00 AM-9:00 PM, Sat-Sun 8:00 AM-10:00 PM.</span></label>{form.orderType === 'pickup' && form.scheduleType === 'later' && <Field label="Pickup Time" type="datetime-local" value={form.pickupTime} set={(v) => setForm({ ...form, pickupTime: v })} />}{form.orderType === 'delivery' && <><Field label="Delivery Time" type="datetime-local" value={form.deliveryTime} set={(v) => setForm({ ...form, deliveryTime: v })} /><Field label="Delivery Address *" value={form.deliveryAddress} set={(v) => setForm({ ...form, deliveryAddress: v })} placeholder="House No., Street, Barangay" wide hint="Delivery areas: Camias (PHP 10), Ulbujan/Canguha (PHP 15), Sohoton/Desamparados (PHP 20)." /><Field label="Landmark (optional)" value={form.landmark} set={(v) => setForm({ ...form, landmark: v })} placeholder="Near school/church/market" wide /></>}<label className="form-block">Payment Method<select className="form-select" value={form.paymentMethod} onChange={(e) => setForm({ ...form, paymentMethod: e.target.value as PaymentMethod })}>{form.orderType === 'pickup' ? <option value="cash_on_pickup">Cash on Pickup</option> : <option value="cash_on_delivery">Cash on Delivery</option>}</select></label><label className="form-block wide">Special Instructions (optional)<textarea className="form-control" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Allergies, preferences, or anything else..." /></label></div></div><Summary subtotal={subtotal} tax={tax} deliveryFee={deliveryFee} total={subtotal + tax + deliveryFee}>{cart.map((item) => <div className="mini-line" key={item.id}><span>{item.name} <em>×{item.quantity}</em></span><strong>{peso(item.price * item.quantity)}</strong></div>)}<button type="submit" disabled={!valid} className="btn-gold full"><i className="bi bi-check2-circle"></i> Place My Order</button><button type="button" className="btn-cafe-out full" onClick={() => go('cart')}><i className="bi bi-arrow-left"></i> Back to Bag</button></Summary></form></section>
+      <section className="light">
+        <form className="container checkout-grid" onSubmit={(e) => { e.preventDefault(); if (valid) placeOrder(form) }}>
+          <div className="checkout-card">
+            <h5><i className="bi bi-person-fill"></i> Your Details</h5>
+            <div className="form-grid">
+              <Field label="Full Name *" value={form.customerName} set={(v) => setForm({ ...form, customerName: v })} placeholder="e.g. Juan dela Cruz" />
+              <Field label="Email Address (optional)" value={form.customerEmail} set={(v) => setForm({ ...form, customerEmail: v })} placeholder="you@email.com" />
+              <Field label="Contact Number *" value={form.customerPhone} set={(v) => setForm({ ...form, customerPhone: v })} placeholder="+63 900 000 0000" />
+              <label className="form-block">Order Type *
+                <select className="form-select" value={form.orderType} onChange={(e) => { const orderType = e.target.value as 'pickup' | 'delivery'; setForm({ ...form, orderType, paymentMethod: orderType === 'pickup' ? 'cash_on_pickup' : 'cash_on_delivery', scheduleType: orderType === 'delivery' ? 'later' : form.scheduleType }) }}>
+                  <option value="pickup">Pickup</option>
+                  <option value="delivery">Delivery</option>
+                </select>
+              </label>
+              <label className="form-block">When do you need it? *
+                <select className="form-select" value={form.scheduleType} onChange={(e) => setForm({ ...form, scheduleType: e.target.value as 'now' | 'later' })} disabled={form.orderType === 'delivery'}>
+                  <option value="now">Now (pickup only, automatic 10-minute preparation)</option>
+                  <option value="later">Later (pickup: 1 hour, delivery: 20 minutes)</option>
+                </select>
+                <span className="form-text">Operating hours: Mon-Fri 7:00 AM-9:00 PM, Sat-Sun 8:00 AM-10:00 PM.</span>
+              </label>
+              {form.orderType === 'pickup' && form.scheduleType === 'later' && <Field label="Pickup Time" type="datetime-local" value={form.pickupTime} set={(v) => setForm({ ...form, pickupTime: v })} />}
+              {form.orderType === 'delivery' && <>
+                <Field label="Delivery Time" type="datetime-local" value={form.deliveryTime} set={(v) => setForm({ ...form, deliveryTime: v })} />
+                <Field label="Delivery Address *" value={form.deliveryAddress} set={(v) => setForm({ ...form, deliveryAddress: v })} placeholder="House No., Street, Barangay" wide hint="Delivery areas: Camias (PHP 10), Ulbujan/Canguha (PHP 15), Sohoton/Desamparados (PHP 20)." />
+                <Field label="Landmark (optional)" value={form.landmark} set={(v) => setForm({ ...form, landmark: v })} placeholder="Near school/church/market" wide />
+              </>}
+              <label className="form-block">Payment Method
+                <select className="form-select" value={form.paymentMethod} onChange={(e) => setForm({ ...form, paymentMethod: e.target.value as PaymentMethod })}>
+                  {form.orderType === 'pickup' ? <option value="cash_on_pickup">Cash on Pickup</option> : <option value="cash_on_delivery">Cash on Delivery</option>}
+                </select>
+              </label>
+              <label className="form-block wide">Special Instructions (optional)
+                <textarea className="form-control" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Allergies, preferences, or anything else..." />
+              </label>
+            </div>
+          </div>
+          <Summary subtotal={subtotal} tax={tax} deliveryFee={deliveryFee} total={subtotal + tax + deliveryFee}>
+            {cart.map((item) => <div className="mini-line" key={item.id}><span>{item.name} <em>×{item.quantity}</em></span><strong>{peso(item.price * item.quantity)}</strong></div>)}
+            {!scheduleValid && <div className="alert danger">Selected time is in the past. Please choose a future date/time.</div>}
+            <button type="submit" disabled={!valid} className="btn-gold full"><i className="bi bi-check2-circle"></i> Place My Order</button>
+            <button type="button" className="btn-cafe-out full" onClick={() => go('cart')}><i className="bi bi-arrow-left"></i> Back to Bag</button>
+          </Summary>
+        </form>
+      </section>
     </>
   )
 }
@@ -785,8 +842,14 @@ const adminTitles: Partial<Record<Page, string>> = {
 const adminTitle = (page: Page) => adminTitles[page] || 'Admin'
 
 function priority(order: Order) {
-  const scheduled = new Date(order.orderType === 'delivery' ? order.deliveryTime : order.pickupTime || order.createdAt).getTime()
+  // Completed or cancelled orders should not be treated as overdue
+  if (orderDone(order.status) || order.status === 'cancelled') return ['low', 'Low Priority']
+
+  const scheduledRaw = order.orderType === 'delivery' ? order.deliveryTime : order.pickupTime || order.createdAt
+  const scheduled = new Date(scheduledRaw).getTime()
   const mins = Math.floor((scheduled - Date.now()) / 60000)
+  if (isNaN(scheduled)) return ['low', 'Low Priority']
+  if (mins < 0) return ['high', 'Overdue']
   if (mins <= 60) return ['high', 'High Priority']
   if (mins < 300) return ['medium', 'Medium Priority']
   return ['low', 'Low Priority']
