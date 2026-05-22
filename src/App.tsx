@@ -780,7 +780,37 @@ function Field({ label, value, set, placeholder, type = 'text', wide, hint, read
 
 function Confirm({ order, go, setTrackingOrderNumber }: { order?: Order; go: (p: Page) => void; setTrackingOrderNumber: (value: string) => void }) {
   if (!order) return null
-  return <><PageHeader title="Order Confirmed!" icon="bi-check-circle-fill" text="Your order has been received. Sit back and relax!" /><section className="light"><div className="confirm-card"><div className="confirm-icon small"><span className="confirm-emoji" role="img" aria-label="confirmed">✅</span><div className="confirm-msg">Order confirmed</div></div><h2>Thank you, {order.customerName}!</h2><p>Your order has been placed successfully. Our team is already on it!</p><div className="order-number-badge">{order.orderNumber}</div><div className="confirm-meta"><Info label="Order Type" value={order.orderType} /><Info label="Payment" value={paymentLabel(order.paymentMethod)} /><Info label="Status" value={statusLabel(order.status)} status={order.status} /><Info label="Time" value={new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} /></div><div className="confirm-items"><strong>Your Items</strong>{order.items.map((item) => <div className="mini-line" key={item.productId}><span>{item.productName} <em>x{item.quantity}</em></span><strong>{peso(item.subtotal)}</strong></div>)}<hr /><div className="mini-line muted"><span>Delivery Fee</span><span>{peso(order.deliveryFee)}</span></div><div className="mini-line total"><span>Total Amount</span><strong>{peso(order.total)}</strong></div></div>{order.notes && <div className="note-box"><strong>Your notes:</strong> {order.notes}</div>}<div className="center gap"><button className="btn-gold" onClick={() => { setTrackingOrderNumber(order.orderNumber); go('track') }}><i className="bi bi-geo-alt-fill"></i> Track Order</button><button className="btn-cafe" onClick={() => go('menu')}><i className="bi bi-grid-fill"></i> Back to Menu</button><button className="btn-cafe-out" onClick={() => go('home')}><i className="bi bi-house-fill"></i> Home</button></div></div></section></>
+  return <>
+    <PageHeader title="Order Confirmed!" icon="bi-check-circle-fill" text="Your order has been received. Sit back and relax!" />
+    <section className="light">
+      <div className="confirm-card">
+        <div className="confirm-icon small"><span className="confirm-emoji" role="img" aria-label="confirmed">✅</span><div className="confirm-msg">Order confirmed</div></div>
+        <h2>Thank you, {order.customerName}!</h2>
+        <p>Your order has been placed successfully. Our team is already on it!</p>
+        <div className="order-number-badge">{order.orderNumber}</div>
+        <div className="confirm-meta">
+          <Info label="Order Type" value={order.orderType} />
+          <Info label="Payment" value={paymentLabel(order.paymentMethod)} />
+          <Info label="Status" value={statusLabel(order.status)} status={order.status} />
+          <Info label="Time" value={new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} />
+          <Info label="Scheduled" value={scheduledLabel(order)} />
+        </div>
+        <div className="confirm-items">
+          <strong>Your Items</strong>
+          {order.items.map((item) => <div className="mini-line" key={item.productId}><span>{item.productName} <em>x{item.quantity}</em></span><strong>{peso(item.subtotal)}</strong></div>)}
+          <hr />
+          <div className="mini-line muted"><span>Delivery Fee</span><span>{peso(order.deliveryFee)}</span></div>
+          <div className="mini-line total"><span>Total Amount</span><strong>{peso(order.total)}</strong></div>
+        </div>
+        {order.notes && <div className="note-box"><strong>Your notes:</strong> {order.notes}</div>}
+        <div className="center gap">
+          <button className="btn-gold" onClick={() => { setTrackingOrderNumber(order.orderNumber); go('track') }}><i className="bi bi-geo-alt-fill"></i> Track Order</button>
+          <button className="btn-cafe" onClick={() => go('menu')}><i className="bi bi-grid-fill"></i> Back to Menu</button>
+          <button className="btn-cafe-out" onClick={() => go('home')}><i className="bi bi-house-fill"></i> Home</button>
+        </div>
+      </div>
+    </section>
+  </>
 }
 
 function Info({ label, value, pill, status }: { label: string; value: string; pill?: boolean; status?: OrderStatus }) {
@@ -855,6 +885,17 @@ function priority(order: Order) {
   return ['low', 'Low Priority']
 }
 
+function scheduledLabel(order: Order) {
+  const when = order.orderType === 'delivery' ? order.deliveryTime : order.pickupTime || order.createdAt
+  if (!when) return 'Not scheduled'
+  try {
+    const d = new Date(when)
+    return d.toLocaleString()
+  } catch {
+    return when
+  }
+}
+
 function Dashboard({ orders, products, staff, ratingSummary, go, setSelectedOrderId }: { orders: Order[]; products: Product[]; staff: Staff[]; ratingSummary: RatingSummary; go: (p: Page) => void; setSelectedOrderId: (id: number) => void }) {
   const today = new Date().toDateString()
   const todayOrders = orders.filter((o) => new Date(o.createdAt).toDateString() === today)
@@ -889,7 +930,23 @@ function OrderView({ order, go, canManage, updateOrderStatus }: { order?: Order;
   useEffect(() => {
     setNextStatus(statusOptions.includes(order.status) ? order.status : statusOptions[0])
   }, [order.status, order.orderType])
-  return <div className="admin-card order-view"><div className="admin-card-header"><h5>{order.orderNumber}</h5><button className="btn-outline-p" onClick={() => go('admin-orders')}>Back</button></div><div className="admin-card-body"><div className="track-meta"><Info label="Customer" value={order.customerName} /><Info label="Phone" value={order.customerPhone} /><Info label="Order Type" value={order.orderType} /><Info label="Status" value={statusLabel(order.status)} pill /></div><hr />{order.items.map((item) => <div className="mini-line" key={item.productId}><span>{item.productName} x{item.quantity}</span><strong>{peso(item.subtotal)}</strong></div>)}<hr /><div className="mini-line total"><strong>Total</strong><strong>{peso(order.total)}</strong></div>{canManage && <div className="status-actions"><select className="admin-form-select" value={nextStatus} onChange={(e) => setNextStatus(e.target.value as OrderStatus)}>{statusOptions.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}</select><button className="btn-p" onClick={async () => { try { await updateOrderStatus(order.id, nextStatus) } catch (error) { console.error('Failed to update order status:', error) } }}>Update Status</button></div>}</div></div>
+  return <div className="admin-card order-view">
+    <div className="admin-card-header"><h5>{order.orderNumber}</h5><button className="btn-outline-p" onClick={() => go('admin-orders')}>Back</button></div>
+    <div className="admin-card-body">
+      <div className="track-meta">
+        <Info label="Customer" value={order.customerName} />
+        <Info label="Phone" value={order.customerPhone} />
+        <Info label="Order Type" value={order.orderType} />
+        <Info label="Status" value={statusLabel(order.status)} pill />
+        <Info label="Scheduled" value={scheduledLabel(order)} />
+      </div>
+      <hr />
+      {order.items.map((item) => <div className="mini-line" key={item.productId}><span>{item.productName} x{item.quantity}</span><strong>{peso(item.subtotal)}</strong></div>)}
+      <hr />
+      <div className="mini-line total"><strong>Total</strong><strong>{peso(order.total)}</strong></div>
+      {canManage && <div className="status-actions"><select className="admin-form-select" value={nextStatus} onChange={(e) => setNextStatus(e.target.value as OrderStatus)}>{statusOptions.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}</select><button className="btn-p" onClick={async () => { try { await updateOrderStatus(order.id, nextStatus) } catch (error) { console.error('Failed to update order status:', error) } }}>Update Status</button></div>}
+    </div>
+  </div>
 }
 
 function AdminProducts({ products, categories, ratingSummary, updateProductAvailability, go, setEditProductId }: { products: Product[]; categories: Category[]; ratingSummary: RatingSummary; updateProductAvailability: (productId: number, availabilityStatus: Product['availabilityStatus']) => Promise<void>; go: (p: Page) => void; setEditProductId: (id: number | null) => void }) {
